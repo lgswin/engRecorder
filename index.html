@@ -186,15 +186,16 @@
     border:1px solid var(--line); border-radius:12px; padding:8px; background:var(--card);
   }
   .seg-row{
-    display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:10px;
+    display:flex; align-items:flex-start; gap:10px; padding:8px 10px; border-radius:10px;
     cursor:pointer; border-left:3px solid transparent; transition:background .15s, border-color .15s;
   }
   .seg-row:active{background:var(--paper-2);}
   .seg-row.active{background:#FBF0DA; border-left-color:var(--gold-deep);}
-  .seg-time{font-family:var(--mono); font-size:11px; color:var(--ink-soft); flex-shrink:0; width:38px;}
+  .seg-time{font-family:var(--mono); font-size:11px; color:var(--ink-soft); flex-shrink:0; width:38px; margin-top:4px;}
   .seg-text{
     flex:1; border:none; background:transparent; font-family:var(--sans); font-size:15px;
-    color:var(--ink); padding:2px 0; min-width:0;
+    color:var(--ink); padding:3px 0; min-width:0; resize:none; overflow:hidden;
+    white-space:pre-wrap; word-break:break-word; line-height:1.45; display:block; width:100%;
   }
   .seg-row.active .seg-text{color:var(--accent); font-weight:600;}
   .seg-text:focus{outline:none; border-bottom:1px solid var(--accent-soft);}
@@ -463,6 +464,7 @@ async function toggleCardPlay(btn){
     cardAudioId = id;
   }
   cardAudio.loop = btn.parentElement.querySelector('[data-loop]').classList.contains('active');
+  pauseAllAudio(cardAudio);
   cardAudio.play();
   document.querySelectorAll('[data-play]').forEach(b=> b.textContent = '▶ 재생');
   btn.textContent = '⏸ 정지';
@@ -497,6 +499,27 @@ let segments = [];
 let pendingSegments = [];
 let lastSegmentEnd = 0;
 let currentInterim = '';
+const MAX_SEG_SEC = 10;
+
+function splitLongSegment(start, end, text){
+  const duration = end - start;
+  const words = text.split(/\s+/).filter(Boolean);
+  if (duration <= MAX_SEG_SEC || words.length <= 1){
+    return [{ start, end, text }];
+  }
+  const numParts = Math.max(1, Math.ceil(duration / MAX_SEG_SEC));
+  const wordsPerPart = Math.max(1, Math.ceil(words.length / numParts));
+  const chunks = [];
+  for (let i = 0; i < words.length; i += wordsPerPart){
+    chunks.push(words.slice(i, i + wordsPerPart).join(' '));
+  }
+  const segDur = duration / chunks.length;
+  return chunks.map((t, i) => ({
+    start: start + i * segDur,
+    end: start + (i + 1) * segDur,
+    text: t
+  }));
+}
 
 function pickMimeType(){
   const candidates = ['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg'];
@@ -510,6 +533,7 @@ document.getElementById('fabRecord').addEventListener('click', openRecordScreen)
 document.getElementById('recCancel').addEventListener('click', closeRecordScreen);
 
 async function openRecordScreen(){
+  pauseAllAudio(null);
   screenRecord.classList.add('show');
   resetRecordUI();
 }
@@ -590,7 +614,8 @@ function startRecognition(){
         const text = res[0].transcript.trim();
         const t = (Date.now() - recStartTs) / 1000;
         if (text){
-          segments.push({ start: lastSegmentEnd, end: t, text });
+          const parts = splitLongSegment(lastSegmentEnd, t, text);
+          segments.push(...parts);
           lastSegmentEnd = t;
         }
         finalTranscript += text + ' ';
@@ -644,13 +669,16 @@ function stopRecording(){
   Promise.all([recognitionDone, recorderDone]).then(()=>{
     recognizer = null;
     if (currentInterim && currentInterim.trim()){
-      segments.push({ start: lastSegmentEnd, end: pendingDuration, text: currentInterim.trim() });
+      const parts = splitLongSegment(lastSegmentEnd, pendingDuration, currentInterim.trim());
+      segments.push(...parts);
       lastSegmentEnd = pendingDuration;
       finalTranscript += currentInterim.trim() + ' ';
       currentInterim = '';
     } else if (segments.length && lastSegmentEnd < pendingDuration){
-      segments[segments.length - 1].end = pendingDuration;
-      lastSegmentEnd = pendingDuration;
+      const last = segments[segments.length - 1];
+      const cappedEnd = Math.min(pendingDuration, last.start + MAX_SEG_SEC);
+      last.end = Math.max(last.end, cappedEnd);
+      lastSegmentEnd = last.end;
     }
     pendingSegments = segments.map(s => ({ ...s }));
     openPreviewScreen();
@@ -662,6 +690,22 @@ function stopEverything(){
   if (recognizer){ try{ recognizer.stop(); }catch(e){} recognizer = null; }
   if (mediaRecorder && mediaRecorder.state !== 'inactive'){ try{ mediaRecorder.stop(); }catch(e){} }
   if (mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); mediaStream = null; }
+}
+
+/* ---------------- Global playback exclusivity ---------------- */
+function pauseAllAudio(except){
+  [cardAudio, prevAudioEl, detAudioEl].forEach(a=>{
+    if (a && a !== except && !a.paused) a.pause();
+  });
+  if (cardAudio !== except){
+    document.querySelectorAll('[data-play]').forEach(b => b.textContent = '▶ 재생');
+  }
+  if (prevAudioEl !== except){
+    const b = document.getElementById('prevPlayBtn'); if (b) b.textContent = '▶';
+  }
+  if (detAudioEl !== except){
+    const b = document.getElementById('detPlayBtn'); if (b) b.textContent = '▶';
+  }
 }
 
 /* ---------------- Synced segment rendering (shared by preview & detail) ---------------- */
@@ -676,25 +720,32 @@ function renderSyncedSegments(containerEl, segArr, audioEl, onEdit){
   containerEl.innerHTML = segArr.map((s, i) => `
     <div class="seg-row" data-idx="${i}" data-start="${s.start}" data-end="${s.end}">
       <span class="seg-time">${fmtTime(s.start)}</span>
-      <input type="text" class="seg-text" value="${escapeAttr(s.text)}" data-idx="${i}">
+      <textarea class="seg-text" rows="1" data-idx="${i}">${escapeHtml(s.text)}</textarea>
     </div>
   `).join('');
 
   containerEl.querySelectorAll('.seg-row').forEach(row => {
     row.addEventListener('click', (e) => {
       if (e.target.classList.contains('seg-text')) return;
+      pauseAllAudio(audioEl);
       audioEl.currentTime = parseFloat(row.getAttribute('data-start'));
       audioEl.play();
     });
   });
-  containerEl.querySelectorAll('.seg-text').forEach(inp => {
-    inp.addEventListener('click', (e) => e.stopPropagation());
-    inp.addEventListener('input', (e) => {
+  containerEl.querySelectorAll('.seg-text').forEach(ta => {
+    autoResizeTextarea(ta);
+    ta.addEventListener('click', (e) => e.stopPropagation());
+    ta.addEventListener('input', (e) => {
+      autoResizeTextarea(e.target);
       const idx = parseInt(e.target.getAttribute('data-idx'), 10);
       segArr[idx].text = e.target.value;
       if (onEdit) onEdit();
     });
   });
+}
+function autoResizeTextarea(ta){
+  ta.style.height = 'auto';
+  ta.style.height = ta.scrollHeight + 'px';
 }
 function highlightSyncedSegments(containerEl, segArr, audioEl){
   if (!segArr.length) return;
@@ -749,7 +800,7 @@ prevAudioEl.addEventListener('timeupdate', ()=>{
 });
 prevAudioEl.addEventListener('ended', ()=>{ document.getElementById('prevPlayBtn').textContent='▶'; });
 document.getElementById('prevPlayBtn').addEventListener('click', ()=>{
-  if (prevAudioEl.paused){ prevAudioEl.play(); document.getElementById('prevPlayBtn').textContent='⏸'; }
+  if (prevAudioEl.paused){ pauseAllAudio(prevAudioEl); prevAudioEl.play(); document.getElementById('prevPlayBtn').textContent='⏸'; }
   else { prevAudioEl.pause(); document.getElementById('prevPlayBtn').textContent='▶'; }
 });
 document.getElementById('prevCancel').addEventListener('click', discardPreview);
@@ -791,6 +842,7 @@ let detSaveTimer = null;
 let detSegments = [];
 
 async function openDetail(id){
+  pauseAllAudio(null);
   const items = await dbAll();
   const it = items.find(x=>x.id===id);
   if (!it) return;
@@ -846,7 +898,7 @@ detAudioEl.addEventListener('timeupdate', ()=>{
 });
 detAudioEl.addEventListener('ended', ()=>{ document.getElementById('detPlayBtn').textContent='▶'; });
 document.getElementById('detPlayBtn').addEventListener('click', ()=>{
-  if (detAudioEl.paused){ detAudioEl.play(); document.getElementById('detPlayBtn').textContent='⏸'; }
+  if (detAudioEl.paused){ pauseAllAudio(detAudioEl); detAudioEl.play(); document.getElementById('detPlayBtn').textContent='⏸'; }
   else { detAudioEl.pause(); document.getElementById('detPlayBtn').textContent='▶'; }
 });
 document.getElementById('detLoop').addEventListener('click', (e)=>{
@@ -854,6 +906,7 @@ document.getElementById('detLoop').addEventListener('click', (e)=>{
   e.target.classList.toggle('active', detAudioEl.loop);
 });
 document.getElementById('detReplay').addEventListener('click', ()=>{
+  pauseAllAudio(detAudioEl);
   detAudioEl.currentTime = 0;
   detAudioEl.play();
   document.getElementById('detPlayBtn').textContent='⏸';
