@@ -265,7 +265,7 @@
       <textarea class="script-input" id="prevScript" placeholder="들은 표현을 입력하거나, 자동 인식된 문장을 다듬어주세요"></textarea>
       <div class="hint" id="prevHint"></div>
       <div class="btnrow">
-        <button class="btn ghost" id="prevDiscard">다시 녹음</button>
+        <button class="btn ghost" id="prevDiscard">녹음취소</button>
         <button class="btn primary" id="prevSave">저장하기</button>
       </div>
     </div>
@@ -538,7 +538,11 @@ function pickMimeType(){
 }
 
 document.getElementById('fabRecord').addEventListener('click', openRecordScreen);
-document.getElementById('recCancel').addEventListener('click', closeRecordScreen);
+document.getElementById('recCancel').addEventListener('click', ()=>{
+  const isRecording = mediaRecorder && mediaRecorder.state === 'recording';
+  if (isRecording && !confirm('녹음을 취소할까요? 저장되지 않아요.')) return;
+  closeRecordScreen();
+});
 
 async function openRecordScreen(){
   pauseAllAudio(null);
