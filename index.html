@@ -544,6 +544,7 @@ async function openRecordScreen(){
   pauseAllAudio(null);
   screenRecord.classList.add('show');
   resetRecordUI();
+  await startRecording();
 }
 function closeRecordScreen(){
   stopEverything();
