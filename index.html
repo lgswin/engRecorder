@@ -849,6 +849,7 @@ async function openDetail(id){
   detCurrentId = id;
   const t = new Date(it.timestamp);
   document.getElementById('detTitle').textContent = `${fmtDateHead(it.dateKey)} · ${fmtClock(t)}`;
+  screenDetail.classList.add('show');
 
   const syncBox = document.getElementById('detSyncScript');
   const fallback = document.getElementById('detScript');
@@ -871,7 +872,6 @@ async function openDetail(id){
   document.getElementById('detPlayBtn').textContent = '▶';
   detCurrentDuration = it.duration || 0;
   updateDetTimeUI();
-  screenDetail.classList.add('show');
 }
 function scheduleDetailSegmentSave(){
   clearTimeout(detSaveTimer);
