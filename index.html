@@ -79,7 +79,10 @@
   .ticket .row-top{display:flex; align-items:center; gap:8px; margin-bottom:6px;}
   .ticket .time{font-family:var(--mono); font-size:12px; color:var(--accent-soft); letter-spacing:.3px;}
   .ticket .dur{font-family:var(--mono); font-size:11px; color:var(--ink-soft); margin-left:auto;}
-  .ticket .script{font-size:15px; line-height:1.5; color:var(--ink); margin:0 0 10px; word-break:break-word; white-space:pre-wrap;}
+  .ticket .script{
+    font-size:15px; line-height:1.5; color:var(--ink); margin:0 0 10px; word-break:break-word;
+    display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden;
+  }
   .ticket .script.empty{color:var(--ink-soft); font-style:italic;}
   .ticket .controls{display:flex; align-items:center; gap:8px;}
   .pillbtn{
