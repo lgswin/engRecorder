@@ -179,6 +179,27 @@
   .btn:active{transform:scale(.98);}
 
   .hint{font-size:12.5px; color:var(--ink-soft); margin-top:8px; line-height:1.5;}
+
+  /* synced transcript segments */
+  .sync-script{
+    display:flex; flex-direction:column; gap:6px; max-height:340px; overflow-y:auto;
+    border:1px solid var(--line); border-radius:12px; padding:8px; background:var(--card);
+  }
+  .seg-row{
+    display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:10px;
+    cursor:pointer; border-left:3px solid transparent; transition:background .15s, border-color .15s;
+  }
+  .seg-row:active{background:var(--paper-2);}
+  .seg-row.active{background:#FBF0DA; border-left-color:var(--gold-deep);}
+  .seg-time{font-family:var(--mono); font-size:11px; color:var(--ink-soft); flex-shrink:0; width:38px;}
+  .seg-text{
+    flex:1; border:none; background:transparent; font-family:var(--sans); font-size:15px;
+    color:var(--ink); padding:2px 0; min-width:0;
+  }
+  .seg-row.active .seg-text{color:var(--accent); font-weight:600;}
+  .seg-text:focus{outline:none; border-bottom:1px solid var(--accent-soft);}
+  .sync-empty{padding:16px; text-align:center; color:var(--ink-soft); font-size:13.5px;}
+
   .toast{
     position:fixed; left:50%; bottom:36px; transform:translateX(-50%);
     background:var(--ink); color:#fff; padding:10px 18px; border-radius:999px;
@@ -236,6 +257,7 @@
         </div>
       </div>
       <label class="field-label">스크립트</label>
+      <div class="sync-script" id="prevSyncScript" style="display:none;"></div>
       <textarea class="script-input" id="prevScript" placeholder="들은 표현을 입력하거나, 자동 인식된 문장을 다듬어주세요"></textarea>
       <div class="hint" id="prevHint"></div>
       <div class="btnrow">
@@ -264,8 +286,9 @@
         <button class="pillbtn" id="detReplay">⏮ 처음부터</button>
       </div>
       <label class="field-label">스크립트</label>
+      <div class="sync-script" id="detSyncScript" style="display:none;"></div>
       <textarea class="script-input" id="detScript" placeholder="스크립트를 입력해주세요"></textarea>
-      <div class="hint">수정하면 자동으로 저장돼요.</div>
+      <div class="hint">수정하면 자동으로 저장돼요. 문장을 탭하면 그 구간부터 재생돼요.</div>
       <div class="btnrow">
         <button class="btn danger" id="detDelete">삭제하기</button>
       </div>
@@ -470,6 +493,10 @@ let lastLiveText = '';
 let recognitionSupported = false;
 let pendingBlob = null;
 let pendingDuration = 0;
+let segments = [];
+let pendingSegments = [];
+let lastSegmentEnd = 0;
+let currentInterim = '';
 
 function pickMimeType(){
   const candidates = ['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg'];
@@ -501,6 +528,9 @@ function resetRecordUI(){
   btn.classList.remove('pulsing');
   finalTranscript = '';
   lastLiveText = '';
+  segments = [];
+  lastSegmentEnd = 0;
+  currentInterim = '';
 }
 
 document.getElementById('recToggle').addEventListener('click', async ()=>{
@@ -553,15 +583,27 @@ function startRecognition(){
   recognizer.continuous = true;
   recognizer.interimResults = true;
   recognizer.onresult = (e)=>{
-    let interim = '';
+    let interimAccum = '';
     for (let i = e.resultIndex; i < e.results.length; i++){
       const res = e.results[i];
-      if (res.isFinal) finalTranscript += res[0].transcript + ' ';
-      else interim += res[0].transcript;
+      if (res.isFinal){
+        const text = res[0].transcript.trim();
+        const t = (Date.now() - recStartTs) / 1000;
+        if (text){
+          segments.push({ start: lastSegmentEnd, end: t, text });
+          lastSegmentEnd = t;
+        }
+        finalTranscript += text + ' ';
+        currentInterim = '';
+      } else {
+        interimAccum += res[0].transcript;
+      }
     }
-    lt.textContent = (finalTranscript + interim).trim() || '듣는 중…';
-    lt.classList.add('has-text');
-    lastLiveText = (finalTranscript + interim).trim();
+    currentInterim = interimAccum;
+    const shown = (finalTranscript + currentInterim).trim();
+    lt.textContent = shown || '듣는 중…';
+    lt.classList.toggle('has-text', !!shown);
+    lastLiveText = shown;
   };
   recognizer.onerror = ()=>{ /* fail silently, manual entry still available */ };
   recognizer.onend = ()=>{
@@ -601,6 +643,16 @@ function stopRecording(){
 
   Promise.all([recognitionDone, recorderDone]).then(()=>{
     recognizer = null;
+    if (currentInterim && currentInterim.trim()){
+      segments.push({ start: lastSegmentEnd, end: pendingDuration, text: currentInterim.trim() });
+      lastSegmentEnd = pendingDuration;
+      finalTranscript += currentInterim.trim() + ' ';
+      currentInterim = '';
+    } else if (segments.length && lastSegmentEnd < pendingDuration){
+      segments[segments.length - 1].end = pendingDuration;
+      lastSegmentEnd = pendingDuration;
+    }
+    pendingSegments = segments.map(s => ({ ...s }));
     openPreviewScreen();
   });
 }
@@ -612,15 +664,75 @@ function stopEverything(){
   if (mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); mediaStream = null; }
 }
 
+/* ---------------- Synced segment rendering (shared by preview & detail) ---------------- */
+function escapeAttr(s){
+  return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+}
+function renderSyncedSegments(containerEl, segArr, audioEl, onEdit){
+  if (!segArr.length){
+    containerEl.innerHTML = `<div class="sync-empty">인식된 구간이 없어요.</div>`;
+    return;
+  }
+  containerEl.innerHTML = segArr.map((s, i) => `
+    <div class="seg-row" data-idx="${i}" data-start="${s.start}" data-end="${s.end}">
+      <span class="seg-time">${fmtTime(s.start)}</span>
+      <input type="text" class="seg-text" value="${escapeAttr(s.text)}" data-idx="${i}">
+    </div>
+  `).join('');
+
+  containerEl.querySelectorAll('.seg-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.classList.contains('seg-text')) return;
+      audioEl.currentTime = parseFloat(row.getAttribute('data-start'));
+      audioEl.play();
+    });
+  });
+  containerEl.querySelectorAll('.seg-text').forEach(inp => {
+    inp.addEventListener('click', (e) => e.stopPropagation());
+    inp.addEventListener('input', (e) => {
+      const idx = parseInt(e.target.getAttribute('data-idx'), 10);
+      segArr[idx].text = e.target.value;
+      if (onEdit) onEdit();
+    });
+  });
+}
+function highlightSyncedSegments(containerEl, segArr, audioEl){
+  if (!segArr.length) return;
+  const t = audioEl.currentTime;
+  let activeIdx = -1;
+  for (let i = 0; i < segArr.length; i++){
+    if (t >= segArr[i].start && t < segArr[i].end) activeIdx = i;
+  }
+  if (activeIdx === -1 && t >= segArr[segArr.length - 1].end) activeIdx = segArr.length - 1;
+  containerEl.querySelectorAll('.seg-row').forEach((row, i) => {
+    row.classList.toggle('active', i === activeIdx);
+  });
+  if (activeIdx >= 0){
+    const activeRow = containerEl.querySelector(`.seg-row[data-idx="${activeIdx}"]`);
+    if (activeRow) activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
 /* ---------------- Preview screen ---------------- */
 let prevAudioEl = new Audio();
 function openPreviewScreen(){
   screenRecord.classList.remove('show');
   screenPreview.classList.add('show');
-  document.getElementById('prevScript').value = (finalTranscript.trim() || lastLiveText.trim());
-  document.getElementById('prevHint').textContent = recognitionSupported
-    ? '자동 인식된 문장이에요. 틀린 부분을 다듬어주세요.'
-    : '자동 인식이 지원되지 않아 비어있어요. 직접 입력해주세요.';
+  const syncBox = document.getElementById('prevSyncScript');
+  const fallback = document.getElementById('prevScript');
+  if (pendingSegments.length){
+    syncBox.style.display = 'flex';
+    fallback.style.display = 'none';
+    renderSyncedSegments(syncBox, pendingSegments, prevAudioEl);
+    document.getElementById('prevHint').textContent = '자동 인식된 문장이에요. 문장을 탭하면 그 구간부터 재생되고, 텍스트를 눌러 수정할 수 있어요.';
+  } else {
+    syncBox.style.display = 'none';
+    fallback.style.display = 'block';
+    fallback.value = (finalTranscript.trim() || lastLiveText.trim());
+    document.getElementById('prevHint').textContent = recognitionSupported
+      ? '이번 녹음에서는 문장을 인식하지 못했어요. 직접 입력해주세요.'
+      : '이 브라우저에서는 자동 인식이 지원되지 않아요. 직접 입력해주세요.';
+  }
   prevAudioEl.src = URL.createObjectURL(pendingBlob);
   prevAudioEl.currentTime = 0;
   updatePrevTimeUI();
@@ -631,7 +743,10 @@ function updatePrevTimeUI(){
   const pct = dur ? (prevAudioEl.currentTime/dur*100) : 0;
   document.getElementById('prevFill').style.width = pct + '%';
 }
-prevAudioEl.addEventListener('timeupdate', updatePrevTimeUI);
+prevAudioEl.addEventListener('timeupdate', ()=>{
+  updatePrevTimeUI();
+  if (pendingSegments.length) highlightSyncedSegments(document.getElementById('prevSyncScript'), pendingSegments, prevAudioEl);
+});
 prevAudioEl.addEventListener('ended', ()=>{ document.getElementById('prevPlayBtn').textContent='▶'; });
 document.getElementById('prevPlayBtn').addEventListener('click', ()=>{
   if (prevAudioEl.paused){ prevAudioEl.play(); document.getElementById('prevPlayBtn').textContent='⏸'; }
@@ -642,22 +757,28 @@ document.getElementById('prevDiscard').addEventListener('click', discardPreview)
 function discardPreview(){
   prevAudioEl.pause();
   pendingBlob = null;
+  pendingSegments = [];
   screenPreview.classList.remove('show');
   openRecordScreen();
 }
 document.getElementById('prevSave').addEventListener('click', async ()=>{
   prevAudioEl.pause();
   const now = new Date();
+  const hasSegments = pendingSegments.length > 0;
   const item = {
     id: uid(),
     timestamp: now.getTime(),
     dateKey: dateKeyOf(now),
-    script: document.getElementById('prevScript').value.trim(),
+    segments: hasSegments ? pendingSegments.map(s => ({ ...s })) : null,
+    script: hasSegments
+      ? pendingSegments.map(s => s.text).join(' ').trim()
+      : document.getElementById('prevScript').value.trim(),
     blob: pendingBlob,
     duration: pendingDuration
   };
   await dbPut(item);
   pendingBlob = null;
+  pendingSegments = [];
   screenPreview.classList.remove('show');
   showToast('저장했어요');
   renderList();
@@ -667,6 +788,7 @@ document.getElementById('prevSave').addEventListener('click', async ()=>{
 let detAudioEl = new Audio();
 let detCurrentId = null;
 let detSaveTimer = null;
+let detSegments = [];
 
 async function openDetail(id){
   const items = await dbAll();
@@ -675,7 +797,20 @@ async function openDetail(id){
   detCurrentId = id;
   const t = new Date(it.timestamp);
   document.getElementById('detTitle').textContent = `${fmtDateHead(it.dateKey)} · ${fmtClock(t)}`;
-  document.getElementById('detScript').value = it.script || '';
+
+  const syncBox = document.getElementById('detSyncScript');
+  const fallback = document.getElementById('detScript');
+  detSegments = (it.segments && it.segments.length) ? it.segments.map(s => ({ ...s })) : [];
+  if (detSegments.length){
+    syncBox.style.display = 'flex';
+    fallback.style.display = 'none';
+    renderSyncedSegments(syncBox, detSegments, detAudioEl, scheduleDetailSegmentSave);
+  } else {
+    syncBox.style.display = 'none';
+    fallback.style.display = 'block';
+    fallback.value = it.script || '';
+  }
+
   detAudioEl.pause();
   detAudioEl.src = URL.createObjectURL(it.blob);
   detAudioEl.currentTime = 0;
@@ -686,6 +821,18 @@ async function openDetail(id){
   updateDetTimeUI();
   screenDetail.classList.add('show');
 }
+function scheduleDetailSegmentSave(){
+  clearTimeout(detSaveTimer);
+  detSaveTimer = setTimeout(async ()=>{
+    const items = await dbAll();
+    const it = items.find(x=>x.id===detCurrentId);
+    if (!it) return;
+    it.segments = detSegments.map(s => ({ ...s }));
+    it.script = detSegments.map(s => s.text).join(' ').trim();
+    await dbPut(it);
+    showToast('스크립트 저장됨');
+  }, 700);
+}
 let detCurrentDuration = 0;
 function updateDetTimeUI(){
   const dur = detCurrentDuration || detAudioEl.duration || 0;
@@ -693,7 +840,10 @@ function updateDetTimeUI(){
   const pct = dur ? (detAudioEl.currentTime/dur*100) : 0;
   document.getElementById('detFill').style.width = pct + '%';
 }
-detAudioEl.addEventListener('timeupdate', updateDetTimeUI);
+detAudioEl.addEventListener('timeupdate', ()=>{
+  updateDetTimeUI();
+  if (detSegments.length) highlightSyncedSegments(document.getElementById('detSyncScript'), detSegments, detAudioEl);
+});
 detAudioEl.addEventListener('ended', ()=>{ document.getElementById('detPlayBtn').textContent='▶'; });
 document.getElementById('detPlayBtn').addEventListener('click', ()=>{
   if (detAudioEl.paused){ detAudioEl.play(); document.getElementById('detPlayBtn').textContent='⏸'; }

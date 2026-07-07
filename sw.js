@@ -1,4 +1,4 @@
-const CACHE = 'pyoyeon-sucheop-v1';
+const CACHE = 'pyoyeon-sucheop-v2';
 const ASSETS = ['./index.html', './manifest.json', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
