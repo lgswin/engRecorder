@@ -823,7 +823,9 @@ function discardPreview(){
   pendingBlob = null;
   pendingSegments = [];
   screenPreview.classList.remove('show');
-  openRecordScreen();
+  pauseAllAudio(null);
+  screenRecord.classList.add('show');
+  resetRecordUI();
 }
 document.getElementById('prevSave').addEventListener('click', async ()=>{
   prevAudioEl.pause();
