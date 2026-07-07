@@ -540,7 +540,12 @@ function pickMimeType(){
 document.getElementById('fabRecord').addEventListener('click', openRecordScreen);
 document.getElementById('recCancel').addEventListener('click', ()=>{
   const isRecording = mediaRecorder && mediaRecorder.state === 'recording';
-  if (isRecording && !confirm('녹음을 취소할까요? 저장되지 않아요.')) return;
+  if (isRecording){
+    if (!confirm('녹음을 취소할까요? 저장되지 않아요.')) return;
+    stopEverything();
+    resetRecordUI();
+    return;
+  }
   closeRecordScreen();
 });
 
@@ -548,7 +553,6 @@ async function openRecordScreen(){
   pauseAllAudio(null);
   screenRecord.classList.add('show');
   resetRecordUI();
-  await startRecording();
 }
 function closeRecordScreen(){
   stopEverything();
