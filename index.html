@@ -466,6 +466,7 @@ let recStartTs = 0;
 let recTimerInt = null;
 let recognizer = null;
 let finalTranscript = '';
+let lastLiveText = '';
 let recognitionSupported = false;
 let pendingBlob = null;
 let pendingDuration = 0;
@@ -499,6 +500,7 @@ function resetRecordUI(){
   btn.classList.add('idle');
   btn.classList.remove('pulsing');
   finalTranscript = '';
+  lastLiveText = '';
 }
 
 document.getElementById('recToggle').addEventListener('click', async ()=>{
@@ -559,6 +561,7 @@ function startRecognition(){
     }
     lt.textContent = (finalTranscript + interim).trim() || '듣는 중…';
     lt.classList.add('has-text');
+    lastLiveText = (finalTranscript + interim).trim();
   };
   recognizer.onerror = ()=>{ /* fail silently, manual entry still available */ };
   recognizer.onend = ()=>{
@@ -573,16 +576,33 @@ function startRecognition(){
 function stopRecording(){
   clearInterval(recTimerInt);
   pendingDuration = (Date.now()-recStartTs)/1000;
-  if (recognizer){ try{ recognizer.stop(); }catch(e){} recognizer = null; }
-  if (mediaRecorder && mediaRecorder.state !== 'inactive'){
+  document.getElementById('recStatus').textContent = '마무리하는 중…';
+
+  const recognitionDone = new Promise((resolve)=>{
+    if (!recognizer) return resolve();
+    let settled = false;
+    const finish = ()=>{ if (!settled){ settled = true; resolve(); } };
+    recognizer.onend = finish;
+    recognizer.onerror = finish;
+    try{ recognizer.stop(); }catch(e){ finish(); }
+    setTimeout(finish, 1200); // safety timeout in case onend never fires
+  });
+
+  const recorderDone = new Promise((resolve)=>{
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') return resolve();
     mediaRecorder.onstop = ()=>{
       const mime = mediaRecorder.mimeType || 'audio/webm';
       pendingBlob = new Blob(recChunks, { type: mime });
-      mediaStream.getTracks().forEach(t=>t.stop());
-      openPreviewScreen();
+      if (mediaStream) mediaStream.getTracks().forEach(t=>t.stop());
+      resolve();
     };
     mediaRecorder.stop();
-  }
+  });
+
+  Promise.all([recognitionDone, recorderDone]).then(()=>{
+    recognizer = null;
+    openPreviewScreen();
+  });
 }
 
 function stopEverything(){
@@ -597,7 +617,7 @@ let prevAudioEl = new Audio();
 function openPreviewScreen(){
   screenRecord.classList.remove('show');
   screenPreview.classList.add('show');
-  document.getElementById('prevScript').value = finalTranscript.trim();
+  document.getElementById('prevScript').value = (finalTranscript.trim() || lastLiveText.trim());
   document.getElementById('prevHint').textContent = recognitionSupported
     ? '자동 인식된 문장이에요. 틀린 부분을 다듬어주세요.'
     : '자동 인식이 지원되지 않아 비어있어요. 직접 입력해주세요.';
