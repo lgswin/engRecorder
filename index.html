@@ -429,7 +429,7 @@ async function renderList(){
 function renderCard(it){
   const t = new Date(it.timestamp);
   const scriptHtml = it.script && it.script.trim()
-    ? escapeHtml(it.script)
+    ? escapeHtml(truncatePreview(it.script, 110))
     : `<span class="empty-hint">스크립트가 비어있어요 — 눌러서 채워보세요</span>`;
   return `
     <div class="ticket" data-open="${it.id}">
@@ -447,6 +447,11 @@ function renderCard(it){
 }
 function escapeHtml(s){
   return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function truncatePreview(text, max){
+  const clean = text.trim();
+  if (clean.length <= max) return clean;
+  return clean.slice(0, max).trim() + '…';
 }
 
 /* audio playback for cards: keep one shared audio element, swap source */
